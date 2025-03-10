@@ -3,6 +3,7 @@ import {
   ColorSchemeProvider,
   Container,
   MantineProvider,
+  Stack,
 } from "@mantine/core";
 import { useColorScheme } from "@mantine/hooks";
 import { ModalsProvider } from "@mantine/modals";
@@ -30,6 +31,7 @@ import Config from "../types/config.type";
 import { CurrentUser } from "../types/user.type";
 import i18nUtil from "../utils/i18n.util";
 import userPreferences from "../utils/userPreferences.util";
+import Footer from "../components/footer/Footer";
 
 const excludeDefaultLayoutRoutes = ["/admin/config/[category]"];
 
@@ -43,7 +45,7 @@ function App({ Component, pageProps }: AppProps) {
   const [route, setRoute] = useState<string>(pageProps.route);
 
   const [configVariables, setConfigVariables] = useState<Config[]>(
-    pageProps.configVariables
+    pageProps.configVariables,
   );
 
   useEffect(() => {
@@ -53,7 +55,7 @@ function App({ Component, pageProps }: AppProps) {
   useEffect(() => {
     const interval = setInterval(
       async () => await authService.refreshAccessToken(),
-      2 * 60 * 1000 // 2 minutes
+      2 * 60 * 1000, // 2 minutes
     );
 
     return () => clearInterval(interval);
@@ -134,10 +136,18 @@ function App({ Component, pageProps }: AppProps) {
                     <Component {...pageProps} />
                   ) : (
                     <>
-                      <Header />
-                      <Container>
-                        <Component {...pageProps} />
-                      </Container>
+                      <Stack
+                        justify="space-between"
+                        sx={{ minHeight: "100vh" }}
+                      >
+                        <div>
+                          <Header />
+                          <Container>
+                            <Component {...pageProps} />
+                          </Container>
+                        </div>
+                        <Footer />
+                      </Stack>
                     </>
                   )}
                 </UserContext.Provider>
@@ -180,7 +190,7 @@ App.getInitialProps = async ({ ctx }: { ctx: GetServerSidePropsContext }) => {
     pageProps.route = ctx.req.url;
 
     const requestLanguage = i18nUtil.getLanguageFromAcceptHeader(
-      ctx.req.headers["accept-language"]
+      ctx.req.headers["accept-language"],
     );
 
     pageProps.language = ctx.req.cookies["language"] ?? requestLanguage;

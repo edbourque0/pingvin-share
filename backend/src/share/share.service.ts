@@ -24,6 +24,7 @@ import { CreateShareDTO } from "./dto/createShare.dto";
 export class ShareService {
   constructor(
     private prisma: PrismaService,
+    private configService: ConfigService,
     private fileService: FileService,
     private emailService: EmailService,
     private config: ConfigService,
@@ -55,13 +56,12 @@ export class ShareService {
 
       const expiresNever = moment(0).toDate() == parsedExpiration;
 
+      const maxExpiration = this.config.get("share.maxExpiration");
       if (
-        this.config.get("share.maxExpiration") !== 0 &&
+        maxExpiration.value !== 0 &&
         (expiresNever ||
           parsedExpiration >
-            moment()
-              .add(this.config.get("share.maxExpiration"), "hours")
-              .toDate())
+            moment().add(maxExpiration.value, maxExpiration.unit).toDate())
       ) {
         throw new BadRequestException(
           "Expiration date exceeds maximum expiration date",
@@ -86,6 +86,7 @@ export class ShareService {
             ? share.recipients.map((email) => ({ email }))
             : [],
         },
+        storageProvider: this.configService.get("s3.enabled") ? "S3" : "LOCAL",
       },
     });
 
@@ -105,6 +106,8 @@ export class ShareService {
   }
 
   async createZip(shareId: string) {
+    if (this.config.get("s3.enabled")) return;
+
     const path = `${SHARE_DIRECTORY}/${shareId}`;
 
     const files = await this.prisma.file.findMany({ where: { shareId } });
@@ -229,7 +232,7 @@ export class ShareService {
       orderBy: {
         expiration: "desc",
       },
-      include: { recipients: true, files: true },
+      include: { recipients: true, files: true, security: true },
     });
 
     return shares.map((share) => {
@@ -237,6 +240,10 @@ export class ShareService {
         ...share,
         size: share.files.reduce((acc, file) => acc + parseInt(file.size), 0),
         recipients: share.recipients.map((recipients) => recipients.email),
+        security: {
+          maxViews: share.security?.maxViews,
+          passwordProtected: !!share.security?.password,
+        },
       };
     });
   }
@@ -315,11 +322,21 @@ export class ShareService {
       },
     });
 
-    if (
-      share?.security?.password &&
-      !(await argon.verify(share.security.password, password))
-    ) {
-      throw new ForbiddenException("Wrong password", "wrong_password");
+    if (share?.security?.password) {
+      if (!password) {
+        throw new ForbiddenException(
+          "This share is password protected",
+          "share_password_required",
+        );
+      }
+
+      const isPasswordValid = await argon.verify(
+        share.security.password,
+        password,
+      );
+      if (!isPasswordValid) {
+        throw new ForbiddenException("Wrong password", "wrong_password");
+      }
     }
 
     if (share.security?.maxViews && share.security.maxViews <= share.views) {
@@ -335,12 +352,13 @@ export class ShareService {
   }
 
   async generateShareToken(shareId: string) {
-    const { expiration } = await this.prisma.share.findUnique({
+    const { expiration, createdAt } = await this.prisma.share.findUnique({
       where: { id: shareId },
     });
 
     const tokenPayload = {
       shareId,
+      shareCreatedAt: moment(createdAt).unix(),
       iat: moment().unix(),
     };
 
@@ -356,7 +374,7 @@ export class ShareService {
   }
 
   async verifyShareToken(shareId: string, token: string) {
-    const { expiration } = await this.prisma.share.findUnique({
+    const { expiration, createdAt } = await this.prisma.share.findUnique({
       where: { id: shareId },
     });
 
@@ -367,7 +385,10 @@ export class ShareService {
         ignoreExpiration: moment(expiration).isSame(0),
       });
 
-      return claims.shareId == shareId;
+      return (
+        claims.shareId == shareId &&
+        claims.shareCreatedAt == moment(createdAt).unix()
+      );
     } catch {
       return false;
     }
